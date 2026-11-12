@@ -1,0 +1,1017 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sakura Spring — Japanese Cherry Blossom Anime Animation</title>
+<meta name="description" content="A Japanese spring anime scene: swaying cherry trees, falling petals, a flowing river, a pagoda and a girl walking to the bridge.">
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #ffd9e8; }
+  body {
+    font-family: "Segoe UI", system-ui, -apple-system, "Hiragino Sans", sans-serif;
+    color: #4a2340;
+  }
+  /* Colourful backdrop behind the scene (visible while the canvas loads) */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    background:
+      radial-gradient(circle at 15% 20%, rgba(255, 143, 190, .85), transparent 45%),
+      radial-gradient(circle at 85% 15%, rgba(140, 200, 255, .85), transparent 45%),
+      radial-gradient(circle at 70% 85%, rgba(190, 150, 255, .75), transparent 45%),
+      radial-gradient(circle at 20% 85%, rgba(255, 214, 140, .75), transparent 45%),
+      #ffe6f0;
+  }
+  #scene { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+
+  /* Glass panel */
+  .glass {
+    background: linear-gradient(135deg, rgba(255, 255, 255, .34), rgba(255, 255, 255, .12));
+    border: 1px solid rgba(255, 255, 255, .55);
+    -webkit-backdrop-filter: blur(15px) saturate(150%);
+    backdrop-filter: blur(15px) saturate(150%);
+    box-shadow: 0 18px 50px rgba(120, 40, 90, .25), inset 0 1px 0 rgba(255, 255, 255, .6);
+  }
+  #intro {
+    position: fixed;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    padding: 20px;
+    transition: opacity .8s ease, visibility .8s;
+  }
+  #intro.hidden { opacity: 0; visibility: hidden; pointer-events: none; }
+  #intro .glass {
+    width: min(440px, 100%);
+    padding: 30px 28px 26px;
+    border-radius: 28px;
+    text-align: center;
+  }
+  .kanji { font-size: 44px; line-height: 1; letter-spacing: 6px; color: #c2314b; text-shadow: 0 2px 10px rgba(255, 255, 255, .8); }
+  h1 { margin: 12px 0 6px; font-size: 26px; font-weight: 700; letter-spacing: .5px; }
+  p { margin: 0 0 20px; font-size: 15px; line-height: 1.5; color: #5d3352; }
+  .row { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+  button {
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+    border-radius: 999px;
+    padding: 12px 22px;
+    border: 1px solid rgba(255, 255, 255, .7);
+    color: #4a2340;
+    background: rgba(255, 255, 255, .35);
+    transition: transform .15s ease, background .2s ease;
+  }
+  button:hover { transform: translateY(-1px); background: rgba(255, 255, 255, .55); }
+  button:focus-visible { outline: 3px solid #c2314b; outline-offset: 2px; }
+  button.primary { color: #fff; border-color: rgba(255, 255, 255, .5); background: linear-gradient(135deg, #ff6f9f, #c2314b); }
+  button.primary:hover { background: linear-gradient(135deg, #ff86ae, #d13d58); }
+  #controls {
+    position: fixed;
+    right: max(14px, env(safe-area-inset-right));
+    bottom: max(14px, env(safe-area-inset-bottom));
+    padding: 6px;
+    border-radius: 999px;
+    display: none;
+    gap: 6px;
+  }
+  #controls.show { display: flex; }
+  #controls button { padding: 9px 16px; font-size: 14px; }
+
+  @media (max-width: 640px) {
+    .glass { -webkit-backdrop-filter: blur(12px) saturate(150%); backdrop-filter: blur(12px) saturate(150%); }
+    #intro .glass { padding: 24px 20px 22px; border-radius: 22px; }
+    .kanji { font-size: 36px; }
+    h1 { font-size: 21px; }
+    p { font-size: 14px; }
+  }
+</style>
+</head>
+<body>
+<canvas id="scene" aria-label="Animated Japanese spring scene with cherry blossoms, a river, a pagoda and a walking girl"></canvas>
+
+<div id="intro">
+  <div class="glass" role="dialog" aria-labelledby="title">
+    <div class="kanji" aria-hidden="true">桜の春</div>
+    <h1 id="title">Sakura Spring</h1>
+    <p>Cherry trees sway in the wind, petals drift over the river, and a girl walks to the bridge. Turn the sound on for water, wind and birdsong.</p>
+    <div class="row">
+      <button class="primary" id="startSound">Start with sound</button>
+      <button id="startSilent">Watch silently</button>
+    </div>
+  </div>
+</div>
+
+<div id="controls" class="glass">
+  <button id="soundToggle" aria-pressed="false">Sound: off</button>
+</div>
+
+<script>
+(() => {
+  'use strict';
+
+  const cv = document.getElementById('scene');
+  const ctx = cv.getContext('2d');
+  const TAU = Math.PI * 2;
+  let W = 0, H = 0, HZ = 0, G = null; // G holds resize-dependent geometry
+
+  // Small deterministic RNG so the scene looks the same on every load.
+  function rng(seed) {
+    return () => {
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+      return seed / 4294967296;
+    };
+  }
+
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+  // Shared wind strength, roughly 0.2 .. 1.3, with slow gusts.
+  function windAt(t) {
+    return clamp(0.65 + 0.4 * Math.sin(t * 0.23) + 0.25 * Math.sin(t * 0.71 + 1), 0.2, 1.3);
+  }
+
+  // ---------- Geometry ----------
+  function riverAt(p) { // p: 0 at horizon, 1 at bottom of screen
+    return {
+      y: HZ + (H - HZ) * p,
+      cx: W * (0.58 + 0.14 * p),
+      hw: W * (0.012 + 0.2 * Math.pow(p, 1.3))
+    };
+  }
+
+  function buildTree(seed, maxDepth) {
+    const r = rng(seed);
+    const tints = ['#ffd1e3', '#ffb7d2', '#ff9ec4', '#fff0f6'];
+    function node(depth, len, w, ang) {
+      const n = { len, w, ang, sp: 0.8 + r() * 0.9, ph: r() * TAU, kids: [], bl: [] };
+      if (depth < maxDepth) {
+        const count = r() < 0.3 ? 3 : 2;
+        for (let i = 0; i < count; i++) {
+          const side = count === 2 ? (i ? 1 : -1) : i - 1;
+          const a = side * (0.28 + r() * 0.38) + (r() - 0.5) * 0.2;
+          n.kids.push(node(depth + 1, len * (0.7 + r() * 0.14), w * 0.68, a));
+        }
+      }
+      if (depth >= maxDepth - 3) {
+        const cnt = depth === maxDepth ? 5 : 3;
+        for (let i = 0; i < cnt; i++) {
+          n.bl.push({
+            x: (r() - 0.5) * len * 1.5,
+            y: -r() * len * 1.2,
+            r: 0.035 + r() * 0.05,
+            c: tints[(r() * tints.length) | 0]
+          });
+        }
+      }
+      return n;
+    }
+    return node(0, 1, 0.1, 0);
+  }
+
+  function drawBranch(n, t, depth, wind) {
+    const sway = Math.sin(t * n.sp + n.ph) * 0.014 * (depth + 1) * wind + 0.01 * depth * wind;
+    ctx.rotate(n.ang + sway);
+    ctx.lineWidth = n.w;
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(0, -n.len);
+    ctx.stroke();
+    ctx.translate(0, -n.len);
+    for (const k of n.kids) {
+      ctx.save();
+      drawBranch(k, t, depth + 1, wind);
+      ctx.restore();
+    }
+    for (const b of n.bl) {
+      ctx.fillStyle = b.c;
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, b.r, 0, TAU);
+      ctx.fill();
+    }
+  }
+
+  function drawTree(tr, t, wind) {
+    ctx.save();
+    ctx.translate(tr.x, tr.y);
+    ctx.scale(tr.size, tr.size);
+    ctx.rotate(tr.lean);
+    ctx.strokeStyle = tr.far ? '#6b4a4a' : '#4a2f2a';
+    ctx.lineCap = 'round';
+    drawBranch(tr.root, t + tr.x, 0, wind);
+    ctx.restore();
+  }
+
+  function layout() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    W = window.innerWidth;
+    H = window.innerHeight;
+    cv.width = Math.round(W * dpr);
+    cv.height = Math.round(H * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    HZ = H * 0.56;
+
+    const r = rng(7);
+    const g = {};
+    const near = Math.min(H, W * 0.9);
+    g.u = near;
+
+    // River outline
+    g.river = new Path2D();
+    const steps = 40;
+    for (let i = 0; i <= steps; i++) {
+      const q = riverAt(i / steps);
+      if (i === 0) g.river.moveTo(q.cx - q.hw, q.y); else g.river.lineTo(q.cx - q.hw, q.y);
+    }
+    for (let i = steps; i >= 0; i--) {
+      const q = riverAt(i / steps);
+      g.river.lineTo(q.cx + q.hw, q.y);
+    }
+    g.river.closePath();
+
+    // Bridge
+    const b = riverAt(0.52);
+    g.by = b.y;
+    g.bx0 = b.cx - b.hw - W * 0.05;
+    g.bx1 = b.cx + b.hw + W * 0.05;
+    g.arch = near * 0.055;
+
+    // Trees
+    g.farTrees = [
+      [0.13, 0.07, 0.08], [0.47, 0.09, 0.085], [0.70, 0.05, 0.07], [0.89, 0.10, 0.09]
+    ].map(([x, dy, s], i) => ({
+      x: W * x, y: HZ + (H - HZ) * dy + H * 0.02, size: near * s, lean: (r() - 0.5) * 0.15,
+      root: buildTree(11 + i * 7, 5), far: true
+    }));
+    const ns = W < H ? 0.78 : 1;
+    g.nearTrees = [
+      { x: -W * 0.01, y: H * 0.99, size: near * 0.2 * ns, lean: 0.06, root: buildTree(101, 7) },
+      { x: W * 1.02, y: H * 0.95, size: near * 0.18 * ns, lean: -0.12, root: buildTree(202, 7) }
+    ];
+
+    // Petals
+    const count = clamp(Math.round(W * H / 8000), 70, 230);
+    g.petals = [];
+    for (let i = 0; i < count; i++) {
+      g.petals.push({
+        x: r() * W, y: r() * H, z: 0.5 + r() * 1.1, rot: r() * TAU, vr: (r() - 0.5) * 3,
+        ph: r() * TAU, c: ['#ffc2d9', '#ffa8c8', '#ffe1ec', '#ff92b8'][(r() * 4) | 0]
+      });
+    }
+
+    // Clouds
+    g.clouds = [];
+    for (let i = 0; i < 6; i++) {
+      g.clouds.push({ x: r() * W, y: H * (0.05 + r() * 0.26), s: H * (0.035 + r() * 0.04), v: 4 + r() * 8 });
+    }
+
+    // Petal carpet + grass tufts on the ground
+    g.dots = [];
+    for (let i = 0; i < 260; i++) {
+      const p = Math.pow(r(), 1.4);
+      g.dots.push({ x: r() * W, y: HZ + (H - HZ) * p, s: 0.8 + p * 2.6, pink: r() < 0.6 });
+    }
+
+    // Water sparkles
+    g.sparks = [];
+    for (let i = 0; i < 70; i++) g.sparks.push({ u: r() * 2 - 1, q: r(), ph: r() * TAU });
+
+    // Birds
+    g.birds = [];
+    for (let i = 0; i < 4; i++) g.birds.push({ x: r() * W, y: H * (0.1 + r() * 0.2), v: 26 + r() * 22, ph: r() * TAU, s: 5 + r() * 4 });
+
+    g.girlX = G ? G.girlX / (G.w || W) * W : -W * 0.05;
+    g.w = W;
+    G = g;
+  }
+
+  // ---------- Background ----------
+  function drawSky(t) {
+    const sky = ctx.createLinearGradient(0, 0, 0, HZ);
+    sky.addColorStop(0, '#8ec5f2');
+    sky.addColorStop(0.55, '#cfe4f7');
+    sky.addColorStop(1, '#ffdfe9');
+    ctx.fillStyle = sky;
+    ctx.fillRect(0, 0, W, HZ + 2);
+
+    const sx = W * 0.8, sy = H * 0.15;
+    const sun = ctx.createRadialGradient(sx, sy, 0, sx, sy, H * 0.3);
+    sun.addColorStop(0, 'rgba(255,252,230,1)');
+    sun.addColorStop(0.12, 'rgba(255,246,205,.9)');
+    sun.addColorStop(1, 'rgba(255,240,200,0)');
+    ctx.fillStyle = sun;
+    ctx.fillRect(0, 0, W, HZ);
+
+    ctx.fillStyle = 'rgba(255,255,255,.85)';
+    for (const c of G.clouds) {
+      const x = ((c.x + t * c.v) % (W + c.s * 8)) - c.s * 4;
+      ctx.beginPath();
+      ctx.ellipse(x, c.y, c.s * 2.4, c.s * 0.7, 0, 0, TAU);
+      ctx.ellipse(x - c.s * 1.1, c.y - c.s * 0.35, c.s * 1.0, c.s * 0.75, 0, 0, TAU);
+      ctx.ellipse(x + c.s * 0.5, c.y - c.s * 0.6, c.s * 1.2, c.s * 0.95, 0, 0, TAU);
+      ctx.ellipse(x + c.s * 1.5, c.y - c.s * 0.2, c.s * 0.9, c.s * 0.6, 0, 0, TAU);
+      ctx.fill();
+    }
+  }
+
+  function drawMountain() {
+    const mx = W * 0.4, top = H * 0.2, half = Math.max(W * 0.26, H * 0.4);
+    const m = ctx.createLinearGradient(0, top, 0, HZ);
+    m.addColorStop(0, '#8fa6d6');
+    m.addColorStop(1, '#d5d9f0');
+    ctx.fillStyle = m;
+    ctx.beginPath();
+    ctx.moveTo(mx - half, HZ);
+    ctx.quadraticCurveTo(mx - half * 0.35, top + (HZ - top) * 0.45, mx - half * 0.09, top);
+    ctx.lineTo(mx + half * 0.09, top);
+    ctx.quadraticCurveTo(mx + half * 0.35, top + (HZ - top) * 0.45, mx + half, HZ);
+    ctx.closePath();
+    ctx.fill();
+    // Snow cap
+    const sh = (HZ - top) * 0.3;
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.moveTo(mx - half * 0.09, top);
+    ctx.lineTo(mx + half * 0.09, top);
+    ctx.lineTo(mx + half * 0.24, top + sh);
+    ctx.lineTo(mx + half * 0.13, top + sh * 0.78);
+    ctx.lineTo(mx + half * 0.05, top + sh * 1.05);
+    ctx.lineTo(mx - half * 0.04, top + sh * 0.8);
+    ctx.lineTo(mx - half * 0.13, top + sh * 1.08);
+    ctx.lineTo(mx - half * 0.24, top + sh);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  function drawHills() {
+    const layers = [
+      { base: 0.12, amp: 0.05, f: 2.2, ph: 0.4, c: '#b7c9e3' },
+      { base: 0.07, amp: 0.035, f: 3.4, ph: 2.1, c: '#f3bcd3' },
+      { base: 0.035, amp: 0.025, f: 5.1, ph: 4.0, c: '#a9d79c' }
+    ];
+    for (const l of layers) {
+      ctx.fillStyle = l.c;
+      ctx.beginPath();
+      ctx.moveTo(0, HZ + 2);
+      for (let i = 0; i <= 60; i++) {
+        const u = i / 60;
+        const y = HZ - H * (l.base + l.amp * Math.sin(u * l.f * Math.PI + l.ph) + l.amp * 0.4 * Math.sin(u * l.f * 3.1 + l.ph * 2));
+        ctx.lineTo(u * W, y);
+      }
+      ctx.lineTo(W, HZ + 2);
+      ctx.closePath();
+      ctx.fill();
+    }
+  }
+
+  function roofPath(y, rw, bw, rh) {
+    ctx.beginPath();
+    ctx.moveTo(-rw, y - rh * 0.35);
+    ctx.quadraticCurveTo(-rw * 0.6, y - rh * 0.1, -bw, y - rh);
+    ctx.lineTo(bw, y - rh);
+    ctx.quadraticCurveTo(rw * 0.6, y - rh * 0.1, rw, y - rh * 0.35);
+    ctx.lineTo(rw * 0.9, y);
+    ctx.lineTo(-rw * 0.9, y);
+    ctx.closePath();
+  }
+
+  function drawPagoda(x, y, s) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(s, s);
+    // Stone base
+    ctx.fillStyle = '#b9b3bd';
+    ctx.fillRect(-0.62, -0.08, 1.24, 0.08);
+    let cy = -0.08;
+    for (let i = 0; i < 5; i++) {
+      const k = 1 - i * 0.14;
+      const bw = 0.34 * k, bh = 0.24, rw = 0.72 * k;
+      ctx.fillStyle = '#c4553f';
+      ctx.fillRect(-bw, cy - bh, bw * 2, bh);
+      ctx.fillStyle = '#f7ead8';
+      ctx.fillRect(-bw * 0.72, cy - bh * 0.82, bw * 1.44, bh * 0.5);
+      ctx.fillStyle = '#7d2f28';
+      for (let j = -2; j <= 2; j++) ctx.fillRect(j * bw * 0.36 - 0.012, cy - bh, 0.024, bh);
+      ctx.fillRect(-bw, cy - bh * 0.3, bw * 2, 0.025);
+      cy -= bh;
+      ctx.fillStyle = '#3f4563';
+      roofPath(cy, rw, bw * 0.75, 0.17);
+      ctx.fill();
+      ctx.fillStyle = '#e8c36a';
+      ctx.fillRect(-rw * 0.9, cy - 0.012, rw * 1.8, 0.022);
+      cy -= 0.17;
+    }
+    // Spire
+    ctx.fillStyle = '#b08d3c';
+    ctx.fillRect(-0.02, cy - 0.5, 0.04, 0.5);
+    for (let j = 0; j < 5; j++) ctx.fillRect(-0.07 + j * 0.008, cy - 0.1 - j * 0.075, 0.14 - j * 0.016, 0.03);
+    ctx.beginPath();
+    ctx.arc(0, cy - 0.52, 0.04, 0, TAU);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawHouse(x, y, s, wide) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(s, s);
+    const bw = wide ? 0.9 : 0.6;
+    ctx.fillStyle = '#f6ecdc';
+    ctx.fillRect(-bw, -0.55, bw * 2, 0.55);
+    ctx.fillStyle = '#6a4636';
+    ctx.fillRect(-bw, -0.07, bw * 2, 0.07);
+    ctx.fillRect(-bw, -0.55, bw * 2, 0.04);
+    const posts = wide ? 6 : 4;
+    for (let i = 0; i <= posts; i++) ctx.fillRect(-bw + (bw * 2 - 0.04) * i / posts, -0.55, 0.04, 0.55);
+    // Shoji screens
+    ctx.fillStyle = '#fff9ee';
+    ctx.strokeStyle = '#9a7a62';
+    ctx.lineWidth = 0.012;
+    for (let i = 1; i < posts - 1; i += 2) {
+      const sx = -bw + (bw * 2 - 0.04) * i / posts + 0.06;
+      const sw = (bw * 2 - 0.04) / posts - 0.08;
+      ctx.fillRect(sx, -0.44, sw, 0.34);
+      ctx.strokeRect(sx, -0.44, sw, 0.34);
+      ctx.beginPath();
+      ctx.moveTo(sx + sw / 2, -0.44); ctx.lineTo(sx + sw / 2, -0.1);
+      ctx.moveTo(sx, -0.27); ctx.lineTo(sx + sw, -0.27);
+      ctx.stroke();
+    }
+    // Curved roof
+    ctx.fillStyle = '#4a4f6b';
+    roofPath(-0.55, bw * 1.3, bw * 0.55, 0.42);
+    ctx.fill();
+    ctx.fillStyle = '#343850';
+    ctx.fillRect(-bw * 0.6, -1.0, bw * 1.2, 0.05);
+    ctx.restore();
+  }
+
+  function drawTorii(x, y, s) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(s, s);
+    ctx.fillStyle = '#d2413d';
+    ctx.fillRect(-0.36, -1, 0.09, 1);
+    ctx.fillRect(0.27, -1, 0.09, 1);
+    ctx.fillRect(-0.45, -0.8, 0.9, 0.07);
+    ctx.fillStyle = '#2f2a3a';
+    ctx.beginPath();
+    ctx.moveTo(-0.62, -1.1);
+    ctx.quadraticCurveTo(0, -0.98, 0.62, -1.1);
+    ctx.lineTo(0.58, -0.98);
+    ctx.quadraticCurveTo(0, -0.9, -0.58, -0.98);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawGround() {
+    const g = ctx.createLinearGradient(0, HZ, 0, H);
+    g.addColorStop(0, '#c4e3a2');
+    g.addColorStop(1, '#7dbd77');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, HZ, W, H - HZ);
+    for (const d of G.dots) {
+      ctx.fillStyle = d.pink ? 'rgba(255,190,214,.8)' : 'rgba(96,160,92,.55)';
+      ctx.beginPath();
+      ctx.ellipse(d.x, d.y, d.s * 1.6, d.s * 0.7, 0, 0, TAU);
+      ctx.fill();
+    }
+    // Footpath leading to the bridge
+    const ph = H * 0.04;
+    const pg = ctx.createLinearGradient(0, G.by - ph * 0.3, 0, G.by + ph);
+    pg.addColorStop(0, '#f1dfc0');
+    pg.addColorStop(1, '#dcc29a');
+    ctx.fillStyle = pg;
+    ctx.beginPath();
+    ctx.ellipse(W / 2, G.by + ph * 0.3, W * 0.75, ph * 0.75, 0, 0, TAU);
+    ctx.fill();
+  }
+
+  // ---------- River ----------
+  function drawRiver(t) {
+    ctx.save();
+    ctx.clip(G.river);
+    const g = ctx.createLinearGradient(0, HZ, 0, H);
+    g.addColorStop(0, '#bfe6f5');
+    g.addColorStop(0.4, '#6fbfe6');
+    g.addColorStop(1, '#3d8fcf');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, HZ, W, H - HZ);
+
+    // Pink reflections of the blossoms
+    ctx.fillStyle = 'rgba(255,190,215,.22)';
+    for (let i = 0; i < 5; i++) {
+      const q = riverAt(0.15 + i * 0.18);
+      ctx.beginPath();
+      ctx.ellipse(q.cx + Math.sin(t * 0.6 + i * 2) * q.hw * 0.5, q.y, q.hw * 0.7, (H - HZ) * 0.03, 0, 0, TAU);
+      ctx.fill();
+    }
+
+    // Waves flowing towards the viewer
+    const N = 26;
+    ctx.lineCap = 'round';
+    for (let i = 0; i < N; i++) {
+      const u = (i / N + t * 0.045) % 1;
+      const p = u * u;
+      const q = riverAt(p);
+      const amp = 1 + 5 * p;
+      const k = 0.05 / (0.25 + p);
+      ctx.strokeStyle = `rgba(255,255,255,${0.2 + 0.4 * p})`;
+      ctx.lineWidth = 0.7 + 2.6 * p;
+      const segs = 3 + (i % 3);
+      for (let s = 0; s < segs; s++) {
+        const a = q.cx - q.hw + (q.hw * 2) * ((s + ((i * 0.37) % 1)) / segs);
+        const len = q.hw * (0.25 + 0.3 * ((i * 7 + s * 3) % 5) / 5);
+        ctx.beginPath();
+        for (let x = a; x <= a + len; x += 6) {
+          const y = q.y + Math.sin(x * k + t * 2.4 + i) * amp;
+          if (x === a) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+      }
+    }
+
+    // Sparkles
+    for (const s of G.sparks) {
+      const u = (s.q + t * 0.045) % 1;
+      const p = u * u;
+      const q = riverAt(p);
+      const tw = Math.sin(t * 5 + s.ph);
+      if (tw < 0.3) continue;
+      ctx.fillStyle = `rgba(255,255,255,${(tw - 0.3) * 1.2})`;
+      ctx.beginPath();
+      ctx.ellipse(q.cx + s.u * q.hw * 0.9, q.y, 1.5 + 5 * p, 0.6 + 1.3 * p, 0, 0, TAU);
+      ctx.fill();
+    }
+
+    // Shadow under the bridge
+    const sh = ctx.createLinearGradient(0, G.by - H * 0.01, 0, G.by + H * 0.06);
+    sh.addColorStop(0, 'rgba(30,50,90,.32)');
+    sh.addColorStop(1, 'rgba(30,50,90,0)');
+    ctx.fillStyle = sh;
+    ctx.fillRect(G.bx0, G.by - H * 0.01, G.bx1 - G.bx0, H * 0.07);
+    ctx.restore();
+
+    // Soft river banks
+    ctx.strokeStyle = 'rgba(88,140,84,.7)';
+    ctx.lineWidth = 3;
+    ctx.stroke(G.river);
+  }
+
+  // ---------- Bridge ----------
+  function deckY(x) {
+    const u = (x - G.bx0) / (G.bx1 - G.bx0);
+    return u <= 0 || u >= 1 ? G.by : G.by - G.arch * Math.sin(Math.PI * u);
+  }
+
+  function drawBridgeDeck() {
+    const thick = G.u * 0.016, n = 30;
+    ctx.fillStyle = '#8e1f2a';
+    for (const u of [0.3, 0.7]) {
+      const x = G.bx0 + (G.bx1 - G.bx0) * u;
+      ctx.fillRect(x - H * 0.008, deckY(x), H * 0.016, G.by - deckY(x) + H * 0.035);
+    }
+    ctx.fillStyle = '#c5303a';
+    ctx.beginPath();
+    for (let i = 0; i <= n; i++) {
+      const x = G.bx0 + (G.bx1 - G.bx0) * i / n;
+      if (i === 0) ctx.moveTo(x, deckY(x)); else ctx.lineTo(x, deckY(x));
+    }
+    for (let i = n; i >= 0; i--) {
+      const x = G.bx0 + (G.bx1 - G.bx0) * i / n;
+      ctx.lineTo(x, deckY(x) + thick);
+    }
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  function drawRail(off, color) {
+    const rh = G.u * 0.042, n = 12;
+    ctx.strokeStyle = color;
+    ctx.lineCap = 'round';
+    ctx.lineWidth = Math.max(2, G.u * 0.006);
+    ctx.beginPath();
+    for (let i = 0; i <= n; i++) {
+      const x = G.bx0 + (G.bx1 - G.bx0) * i / n;
+      ctx.moveTo(x, deckY(x) + off);
+      ctx.lineTo(x, deckY(x) + off - rh);
+    }
+    ctx.stroke();
+    for (const f of [1, 0.55]) {
+      ctx.beginPath();
+      for (let i = 0; i <= 30; i++) {
+        const x = G.bx0 + (G.bx1 - G.bx0) * i / 30;
+        const y = deckY(x) + off - rh * f;
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+    // End posts with golden caps
+    for (const x of [G.bx0, G.bx1]) {
+      ctx.fillStyle = color;
+      ctx.fillRect(x - H * 0.006, G.by + off - rh * 1.25, H * 0.012, rh * 1.25);
+      ctx.fillStyle = '#e8c36a';
+      ctx.beginPath();
+      ctx.arc(x, G.by + off - rh * 1.3, H * 0.009, 0, TAU);
+      ctx.fill();
+    }
+  }
+
+  // ---------- Anime girl ----------
+  function rr(x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  function sleeve(angle, color) {
+    ctx.save();
+    ctx.translate(0, -0.69);
+    ctx.rotate(angle);
+    ctx.fillStyle = '#ffe3d3';
+    ctx.beginPath();
+    ctx.arc(0.012, 0.24, 0.02, 0, TAU);
+    ctx.fill();
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(-0.045, 0);
+    ctx.lineTo(0.045, 0);
+    ctx.lineTo(0.05, 0.2);
+    ctx.quadraticCurveTo(0.03, 0.235, -0.01, 0.23);
+    ctx.quadraticCurveTo(-0.07, 0.33, -0.085, 0.24);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawGirl(x, y, s, ph, t, wind) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(s, s);
+
+    ctx.fillStyle = 'rgba(40,30,60,.2)';
+    ctx.beginPath();
+    ctx.ellipse(0, 0.008, 0.15, 0.022, 0, 0, TAU);
+    ctx.fill();
+
+    // Feet (tabi socks and zori sandals)
+    for (const [o, far] of [[Math.PI, true], [0, false]]) {
+      const fx = Math.sin(ph + o) * 0.07;
+      const fy = -Math.max(0, Math.cos(ph + o)) * 0.028;
+      ctx.fillStyle = far ? '#e6e0ec' : '#ffffff';
+      rr(fx - 0.03, fy - 0.04, 0.075, 0.034, 0.014);
+      ctx.fillStyle = '#7a3b2e';
+      rr(fx - 0.035, fy - 0.009, 0.09, 0.011, 0.004);
+    }
+
+    ctx.translate(0, -Math.abs(Math.sin(ph)) * 0.014);
+    const swing = Math.sin(ph) * 0.32;
+    const sw = -0.012 - wind * 0.028 + Math.sin(t * 2.3) * 0.01;
+
+    // Long hair behind the body
+    ctx.fillStyle = '#2e2233';
+    ctx.beginPath();
+    ctx.moveTo(-0.06, -0.92);
+    ctx.bezierCurveTo(-0.2 + sw, -0.84, -0.2 + sw * 2, -0.62, -0.15 + sw * 3, -0.42);
+    ctx.lineTo(-0.05 + sw * 2, -0.47);
+    ctx.bezierCurveTo(-0.07, -0.62, -0.03, -0.74, 0, -0.8);
+    ctx.closePath();
+    ctx.fill();
+
+    sleeve(-swing, '#e58fb0');
+
+    // Kimono
+    const hem = Math.sin(ph) * 0.014;
+    const kg = ctx.createLinearGradient(0, -0.72, 0, -0.04);
+    kg.addColorStop(0, '#ffc4d9');
+    kg.addColorStop(1, '#f48fb5');
+    ctx.fillStyle = kg;
+    ctx.beginPath();
+    ctx.moveTo(-0.078, -0.72);
+    ctx.quadraticCurveTo(-0.1, -0.4, -0.108 + hem, -0.045);
+    ctx.lineTo(0.108 + hem, -0.045);
+    ctx.quadraticCurveTo(0.09, -0.4, 0.072, -0.72);
+    ctx.closePath();
+    ctx.fill();
+    // Blossom pattern
+    ctx.fillStyle = 'rgba(255,255,255,.85)';
+    for (const [px, py] of [[-0.05, -0.34], [0.04, -0.26], [-0.02, -0.16], [0.06, -0.12], [-0.07, -0.1], [0.01, -0.38]]) {
+      for (let i = 0; i < 5; i++) {
+        ctx.beginPath();
+        ctx.arc(px + Math.cos(i * TAU / 5) * 0.011, py + Math.sin(i * TAU / 5) * 0.011, 0.007, 0, TAU);
+        ctx.fill();
+      }
+    }
+    // Hem lining
+    ctx.fillStyle = '#c2314b';
+    ctx.fillRect(-0.108 + hem, -0.06, 0.216, 0.016);
+    // Collar
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.moveTo(-0.04, -0.73); ctx.lineTo(0.055, -0.73); ctx.lineTo(0.02, -0.6); ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#ffe3d3';
+    ctx.beginPath();
+    ctx.moveTo(-0.015, -0.74); ctx.lineTo(0.038, -0.74); ctx.lineTo(0.018, -0.655); ctx.closePath();
+    ctx.fill();
+    // Obi with a bow at the back
+    ctx.fillStyle = '#a82540';
+    rr(-0.145, -0.57, 0.07, 0.15, 0.025);
+    ctx.fillStyle = '#c2314b';
+    rr(-0.097, -0.535, 0.186, 0.09, 0.012);
+    ctx.fillStyle = '#f2cf73';
+    ctx.fillRect(-0.097, -0.497, 0.186, 0.012);
+
+    sleeve(swing, '#f9aecb');
+
+    // Neck and head
+    const hx = 0.012, hy = -0.835, hr = 0.1;
+    ctx.fillStyle = '#ffe3d3';
+    ctx.fillRect(-0.012, -0.77, 0.045, 0.05);
+    ctx.beginPath();
+    ctx.arc(hx, hy, hr, 0, TAU);
+    ctx.fill();
+
+    // Face
+    const blink = (t % 3.7) < 0.12;
+    ctx.strokeStyle = '#3a2540';
+    ctx.lineCap = 'round';
+    if (blink) {
+      ctx.lineWidth = 0.008;
+      ctx.beginPath();
+      ctx.moveTo(0.046, -0.822); ctx.lineTo(0.078, -0.822);
+      ctx.moveTo(0.094, -0.824); ctx.lineTo(0.106, -0.824);
+      ctx.stroke();
+    } else {
+      ctx.fillStyle = '#3a2540';
+      ctx.beginPath();
+      ctx.ellipse(0.062, -0.825, 0.016, 0.027, 0, 0, TAU);
+      ctx.ellipse(0.1, -0.827, 0.007, 0.023, 0, 0, TAU);
+      ctx.fill();
+      ctx.fillStyle = '#8a56c2';
+      ctx.beginPath();
+      ctx.ellipse(0.063, -0.817, 0.011, 0.016, 0, 0, TAU);
+      ctx.fill();
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.arc(0.068, -0.836, 0.006, 0, TAU);
+      ctx.arc(0.058, -0.812, 0.003, 0, TAU);
+      ctx.fill();
+      ctx.lineWidth = 0.007;
+      ctx.beginPath();
+      ctx.moveTo(0.042, -0.848);
+      ctx.quadraticCurveTo(0.062, -0.862, 0.082, -0.848);
+      ctx.stroke();
+    }
+    ctx.fillStyle = 'rgba(255,120,150,.45)';
+    ctx.beginPath();
+    ctx.ellipse(0.068, -0.785, 0.022, 0.011, 0, 0, TAU);
+    ctx.fill();
+    ctx.lineWidth = 0.006;
+    ctx.strokeStyle = '#b5475f';
+    ctx.beginPath();
+    ctx.arc(0.088, -0.772, 0.012, 0.25 * Math.PI, 0.8 * Math.PI);
+    ctx.stroke();
+
+    // Hair cap, fringe and side lock
+    ctx.fillStyle = '#2e2233';
+    ctx.beginPath();
+    ctx.arc(hx, hy, hr * 1.09, Math.PI * 0.82, Math.PI * 1.93);
+    ctx.quadraticCurveTo(0.075, -0.865, 0.03, -0.875);
+    ctx.quadraticCurveTo(0.0, -0.85, -0.012, -0.8);
+    ctx.quadraticCurveTo(-0.03, -0.72, -0.05 + sw, -0.66);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,.16)';
+    ctx.beginPath();
+    ctx.ellipse(-0.01, -0.915, 0.055, 0.012, -0.25, 0, TAU);
+    ctx.fill();
+
+    // Hair flower
+    for (let i = 0; i < 5; i++) {
+      ctx.fillStyle = '#ff8fb5';
+      ctx.beginPath();
+      ctx.arc(-0.055 + Math.cos(i * TAU / 5) * 0.017, -0.9 + Math.sin(i * TAU / 5) * 0.017, 0.013, 0, TAU);
+      ctx.fill();
+    }
+    ctx.fillStyle = '#ffe27a';
+    ctx.beginPath();
+    ctx.arc(-0.055, -0.9, 0.008, 0, TAU);
+    ctx.fill();
+
+    ctx.restore();
+  }
+
+  // ---------- Petals and birds ----------
+  function drawPetals(t, dt, wind) {
+    for (const p of G.petals) {
+      p.x += ((35 + 75 * wind) * p.z + Math.sin(t * 1.4 + p.ph) * 28) * dt;
+      p.y += ((22 + 20 * p.z) + Math.cos(t * 1.1 + p.ph) * 14) * dt;
+      p.rot += p.vr * dt;
+      if (p.x > W + 20) { p.x = -20; p.y = Math.random() * H; }
+      if (p.y > H + 20) { p.y = -20; p.x = Math.random() * W; }
+      const size = 3.2 * p.z * Math.max(1, H / 800);
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate(p.rot);
+      ctx.scale(1, 0.35 + 0.65 * Math.abs(Math.cos(t * 2.2 + p.ph)));
+      ctx.fillStyle = p.c;
+      ctx.beginPath();
+      ctx.moveTo(0, -size);
+      ctx.bezierCurveTo(size * 1.1, -size * 0.6, size * 0.8, size * 0.8, 0, size);
+      ctx.bezierCurveTo(-size * 0.8, size * 0.8, -size * 1.1, -size * 0.6, 0, -size);
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  function drawBirds(t) {
+    ctx.strokeStyle = 'rgba(50,45,80,.75)';
+    ctx.lineWidth = 1.6;
+    ctx.lineCap = 'round';
+    for (const b of G.birds) {
+      const x = ((b.x + t * b.v) % (W + 80)) - 40;
+      const y = b.y + Math.sin(t * 0.7 + b.ph) * H * 0.015;
+      const flap = Math.sin(t * 9 + b.ph) * b.s * 0.6;
+      ctx.beginPath();
+      ctx.moveTo(x - b.s, y - flap);
+      ctx.quadraticCurveTo(x - b.s * 0.4, y - b.s * 0.3, x, y);
+      ctx.quadraticCurveTo(x + b.s * 0.4, y - b.s * 0.3, x + b.s, y - flap);
+      ctx.stroke();
+    }
+  }
+
+  // ---------- Main loop ----------
+  let last = 0;
+  function frame(now) {
+    const t = now / 1000;
+    const dt = Math.min(0.05, t - last || 0.016);
+    last = t;
+    const wind = windAt(t);
+
+    drawSky(t);
+    drawMountain();
+    drawBirds(t);
+    drawHills();
+
+    const hs = G.u * 0.13;
+    drawPagoda(W * 0.3, HZ + H * 0.012, hs * 1.15);
+    drawHouse(W * 0.2, HZ + H * 0.03, hs * 0.55, true);
+    drawHouse(W * 0.42, HZ + H * 0.022, hs * 0.42, false);
+    drawHouse(W * 0.67, HZ + H * 0.028, hs * 0.5, false);
+    drawHouse(W * 0.8, HZ + H * 0.04, hs * 0.62, true);
+
+    drawGround();
+    drawRiver(t);
+    drawTorii(G.bx1 + W * 0.1, G.by - H * 0.01, G.u * 0.15);
+    for (const tr of G.farTrees) drawTree(tr, t, wind);
+
+    // Girl walks along the path and over the bridge, then starts again.
+    const gs = G.u * 0.2;
+    G.girlX += gs * 0.42 * dt;
+    if (G.girlX > W + gs) G.girlX = -gs;
+    const gy = deckY(G.girlX);
+
+    drawRail(-G.u * 0.004, '#9c2530');
+    drawBridgeDeck();
+    drawGirl(G.girlX, gy + G.u * 0.008, gs, G.girlX / (gs * 0.11), t, wind);
+    drawRail(G.u * 0.014, '#d93a45');
+
+    for (const tr of G.nearTrees) drawTree(tr, t, wind);
+    drawPetals(t, dt, wind);
+
+    // Warm light bloom
+    const glow = ctx.createRadialGradient(W * 0.8, H * 0.15, 0, W * 0.8, H * 0.15, Math.max(W, H) * 0.9);
+    glow.addColorStop(0, 'rgba(255,240,210,.22)');
+    glow.addColorStop(1, 'rgba(255,170,200,.06)');
+    ctx.fillStyle = glow;
+    ctx.fillRect(0, 0, W, H);
+
+    requestAnimationFrame(frame);
+  }
+
+  // ---------- Sound (fully synthesised, no audio files) ----------
+  let ac = null, master = null, soundOn = false, birdTimer = 0;
+
+  function initAudio() {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return false;
+    ac = new AC();
+    master = ac.createGain();
+    master.gain.value = 0;
+    master.connect(ac.destination);
+
+    const buf = ac.createBuffer(1, ac.sampleRate * 3, ac.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+    const noise = () => {
+      const s = ac.createBufferSource();
+      s.buffer = buf;
+      s.loop = true;
+      s.start();
+      return s;
+    };
+    const lfo = (freq, depth, target) => {
+      const o = ac.createOscillator(), g = ac.createGain();
+      o.frequency.value = freq;
+      g.gain.value = depth;
+      o.connect(g).connect(target);
+      o.start();
+    };
+
+    // Water: steady stream plus bubbling highs
+    const bp = ac.createBiquadFilter();
+    bp.type = 'bandpass'; bp.frequency.value = 1100; bp.Q.value = 0.7;
+    const wg = ac.createGain();
+    wg.gain.value = 0.16;
+    noise().connect(bp).connect(wg).connect(master);
+    lfo(0.37, 320, bp.frequency);
+    const hp = ac.createBiquadFilter();
+    hp.type = 'highpass'; hp.frequency.value = 2800;
+    const bg = ac.createGain();
+    bg.gain.value = 0.04;
+    noise().connect(hp).connect(bg).connect(master);
+    lfo(3.1, 0.022, bg.gain);
+    lfo(0.83, 0.014, bg.gain);
+
+    // Wind: low filtered noise with slow gusts
+    const lp = ac.createBiquadFilter();
+    lp.type = 'lowpass'; lp.frequency.value = 380; lp.Q.value = 1.4;
+    const ng = ac.createGain();
+    ng.gain.value = 0.2;
+    noise().connect(lp).connect(ng).connect(master);
+    lfo(0.09, 190, lp.frequency);
+    lfo(0.13, 0.11, ng.gain);
+    return true;
+  }
+
+  function chirp() {
+    birdTimer = setTimeout(chirp, 900 + Math.random() * 3600);
+    if (!soundOn || !ac || ac.state !== 'running') return;
+    const t0 = ac.currentTime + 0.02;
+    const base = 2300 + Math.random() * 2400;
+    const notes = 2 + ((Math.random() * 5) | 0);
+    const out = ac.createGain();
+    out.gain.value = 0.5 + Math.random() * 0.5;
+    if (ac.createStereoPanner) {
+      const pan = ac.createStereoPanner();
+      pan.pan.value = Math.random() * 1.6 - 0.8;
+      out.connect(pan).connect(master);
+    } else {
+      out.connect(master);
+    }
+    for (let i = 0; i < notes; i++) {
+      const st = t0 + i * (0.1 + Math.random() * 0.05);
+      const o = ac.createOscillator(), g = ac.createGain();
+      o.type = 'sine';
+      o.frequency.setValueAtTime(base * (0.9 + Math.random() * 0.25), st);
+      o.frequency.exponentialRampToValueAtTime(base * (1.25 + Math.random() * 0.4), st + 0.045);
+      o.frequency.exponentialRampToValueAtTime(base * 0.95, st + 0.09);
+      g.gain.setValueAtTime(0.0001, st);
+      g.gain.exponentialRampToValueAtTime(0.07, st + 0.012);
+      g.gain.exponentialRampToValueAtTime(0.0001, st + 0.1);
+      o.connect(g).connect(out);
+      o.start(st);
+      o.stop(st + 0.12);
+    }
+  }
+
+  const toggle = document.getElementById('soundToggle');
+  function setSound(on) {
+    if (on && !ac && !initAudio()) on = false;
+    soundOn = on;
+    if (ac) {
+      if (on) ac.resume();
+      master.gain.cancelScheduledValues(ac.currentTime);
+      master.gain.setTargetAtTime(on ? 0.9 : 0, ac.currentTime, 0.25);
+      if (on && !birdTimer) chirp();
+    }
+    toggle.textContent = on ? 'Sound: on' : 'Sound: off';
+    toggle.setAttribute('aria-pressed', String(on));
+  }
+
+  function start(withSound) {
+    document.getElementById('intro').classList.add('hidden');
+    document.getElementById('controls').classList.add('show');
+    setSound(withSound);
+  }
+
+  document.getElementById('startSound').addEventListener('click', () => start(true));
+  document.getElementById('startSilent').addEventListener('click', () => start(false));
+  toggle.addEventListener('click', () => setSound(!soundOn));
+
+  window.addEventListener('resize', layout);
+  layout();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
